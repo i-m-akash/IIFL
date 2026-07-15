@@ -1284,7 +1284,7 @@ function AgentWizard({
                   </div>
                 </div>
 
-                {promptSourceMode === 'description' ? (
+                {promptSourceMode === 'description' ? (<>
                   <div className="space-y-2">
                     <Label htmlFor="call-flow-description">Call Flow Description</Label>
                     <textarea
@@ -1301,6 +1301,33 @@ function AgentWizard({
                     <p className="text-xs text-slate-500">This text is used only to generate the call flow. The card description lives in General Info.</p>
                     {errors.callFlowText ? <p className="text-sm text-red-600">{errors.callFlowText}</p> : null}
                   </div>
+                  <div className="space-y-3 md:col-span-2">
+                    <div>
+                      <Label>Supported Languages</Label>
+                      <p className="mt-1 text-xs text-slate-600">Choose the languages this agent should support for conversations.</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2.5">
+                      {LANGUAGE_OPTIONS.map((language) => {
+                        const selected = form.languages.includes(language)
+                        return (
+                          <button
+                            key={language}
+                            type="button"
+                            onClick={() => toggleLanguage(language)}
+                            className={cn(
+                              'rounded-full border px-4 py-2 text-sm transition-colors',
+                              selected ? 'border-primary bg-primary/10 text-primary' : 'border-slate-200 bg-white text-slate-700 hover:border-primary/40'
+                            )}
+                          >
+                            {language}
+                          </button>
+                        )
+                      })}
+                    </div>
+                    {errors.languages ? <p className="text-sm text-red-600">{errors.languages}</p> : null}
+                  </div>
+                </>
+
                 ) : (
                   <div className="space-y-2">
                     <Label>Conversation Script Files</Label>
@@ -1561,7 +1588,7 @@ function AgentWizard({
                   </>
                 )}
 
-                <div className="space-y-3 md:col-span-2">
+                {/* <div className="space-y-3 md:col-span-2">
                   <div>
                     <Label>Supported Languages</Label>
                     <p className="mt-1 text-xs text-slate-600">Choose the languages this agent should support for conversations.</p>
@@ -1585,7 +1612,7 @@ function AgentWizard({
                     })}
                   </div>
                   {errors.languages ? <p className="text-sm text-red-600">{errors.languages}</p> : null}
-                </div>
+                </div> */}
               </div>
             </div>
           ) : null}
