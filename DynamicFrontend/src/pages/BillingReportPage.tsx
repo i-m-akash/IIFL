@@ -320,12 +320,52 @@ export default function BillingReportPage() {
 
     const currentMonth = useMemo(() => new Date().toLocaleString('default', { month: 'long', year: 'numeric' }), [])
 
+    const isIifl = useMemo(() => {
+        return user?.adminSlug === 'iiflsamasta' || user?.email === 'admin@iiflsamasta.local'
+    }, [user])
+
     // ── Fetch dropdown options (wide range, no filters) ────────────────────────
 
     const loadOptions = useCallback(async () => {
         optionsAbortRef.current?.abort()
         optionsAbortRef.current = new AbortController()
         try {
+            if (isIifl) {
+                // Fetch the list of agents from iiflsamasta/ai-agents (via /api/agents)
+                const resAgents = await apiFetch('/api/agents')
+                if (resAgents.ok) {
+                    const jsonAgents = (await resAgents.json()) as { success?: boolean; data?: any[] }
+                    if (jsonAgents.success && Array.isArray(jsonAgents.data)) {
+                        const filteredAgents = jsonAgents.data
+                            .filter((agent) => {
+                                const status = String(agent.status || '').toLowerCase()
+                                return status === 'active'
+                            })
+                            .map((agent) => agent.agent_id)
+                            .filter(Boolean)
+                        setAllAgents([...new Set(filteredAgents)].sort())
+                    }
+                }
+
+                // Still fetch clients from billing report data
+                const params = new URLSearchParams({
+                    period: 'daily',
+                    exclude_under: '0',
+                    date_from: '2020-01-01',
+                    date_to: getTodayIST(),
+                })
+                const resBilling = await apiFetch(`/api/billing/report?${params.toString()}`)
+                if (resBilling.ok) {
+                    const jsonBilling = (await resBilling.json()) as BillingResponse | { success: false }
+                    if (jsonBilling.success) {
+                        const rows = (jsonBilling as BillingResponse).rows
+                        const clients = [...new Set(rows.map((r) => r.client_name).filter(Boolean))].sort()
+                        setAllClients(clients)
+                    }
+                }
+                return
+            }
+
             // Fetch last 2 years of data to get all distinct clients/agents
             const params = new URLSearchParams({
                 period: 'daily',
@@ -345,7 +385,7 @@ export default function BillingReportPage() {
         } catch {
             // silently ignore — dropdowns will just be empty
         }
-    }, [])
+    }, [isIifl])
 
     // ── Fetch report ──────────────────────────────────────────────────────────
 
@@ -409,10 +449,12 @@ export default function BillingReportPage() {
                 const merged = [...new Set([...prev, ...reportData.rows.map((r) => r.client_name).filter(Boolean)])].sort()
                 return merged
             })
-            setAllAgents((prev) => {
-                const merged = [...new Set([...prev, ...reportData.rows.map((r) => r.agent_id).filter(Boolean)])].sort()
-                return merged
-            })
+            if (!isIifl) {
+                setAllAgents((prev) => {
+                    const merged = [...new Set([...prev, ...reportData.rows.map((r) => r.agent_id).filter(Boolean)])].sort()
+                    return merged
+                })
+            }
         } catch (err) {
             if ((err as Error).name !== 'AbortError') {
                 setError('Failed to load billing report. Please try again.')
