@@ -58,6 +58,8 @@ export const billingRoutes = new Hono<AppEnv>().use('*', authMiddleware)
  * Only counts answered calls where webhook_status = 'sent'.
  */
 billingRoutes.get('/report', async (c) => {
+    let sql: ReturnType<typeof postgres> | null = null
+    let resolved: any = null
     try {
         const user = c.get('user')!
 
@@ -75,7 +77,7 @@ billingRoutes.get('/report', async (c) => {
         }
 
         // Resolve Postgres connection
-        const resolved = resolvePostgresReadUrl(c.env, adminRow.datasourceBinding)
+        resolved = resolvePostgresReadUrl(c.env, adminRow.datasourceBinding)
         if (!resolved) {
             return c.json(
                 {
@@ -84,6 +86,54 @@ billingRoutes.get('/report', async (c) => {
                 },
                 500,
             )
+        }
+
+        // Initialize postgres connection
+        sql = postgres(resolved.url, {
+            max: resolved.viaHyperdrive ? 5 : 1,
+            idle_timeout: resolved.viaHyperdrive ? 20 : 5,
+            connect_timeout: 10,
+            prepare: false,
+            fetch_types: false,
+            onnotice: () => { },
+        })
+
+        // ── Detect Schema and Table(s) dynamically from PostgreSQL ───────────────
+        let schema = adminRow.postgresSchema?.trim() || 'mobicule_data'
+        let detectedTables: string[] = []
+
+        try {
+            const tableMatches = (await sql.unsafe(`
+                SELECT table_schema, table_name
+                FROM information_schema.tables
+                WHERE table_name IN ('fact_answered_calls', 'fact_answered_customer', 'fact_answered_employee')
+                  AND table_schema NOT IN ('pg_catalog', 'information_schema')
+            `)) as Record<string, unknown>[]
+
+            if (tableMatches.length > 0) {
+                // Determine the correct schema from the database
+                let matchedSchema = tableMatches[0].table_schema as string
+                const configuredSchemaMatch = tableMatches.find(t => String(t.table_schema).toLowerCase() === schema.toLowerCase())
+                if (configuredSchemaMatch) {
+                    matchedSchema = configuredSchemaMatch.table_schema as string
+                }
+
+                schema = matchedSchema
+                detectedTables = tableMatches
+                    .filter(t => String(t.table_schema).toLowerCase() === matchedSchema.toLowerCase())
+                    .map(t => t.table_name as string)
+            }
+        } catch (detectErr) {
+            console.warn('Postgres schema detection failed, falling back:', detectErr)
+        }
+
+        // If the detected schema is different from the saved SQLite config, fix the configuration in SQLite
+        if (schema && schema !== adminRow.postgresSchema) {
+            await db
+                .update(admins)
+                .set({ postgresSchema: schema })
+                .where(eq(admins.id, user.adminId))
+                .catch((err) => console.error('Failed to update SQLite config:', err))
         }
 
         // ── Parse & validate query params ────────────────────────────────────────
@@ -103,11 +153,21 @@ billingRoutes.get('/report', async (c) => {
         const clientFilter = (c.req.query('client') ?? '').trim()
         const agentIdFilter = (c.req.query('agent_id') ?? '').trim()
 
-        // ── Build billing SQL using admin's configured schema ──────────────────
+        // ── Build billing SQL using detected schema & table(s) ──────────────────
 
-        // Use the admin's postgresSchema if configured, else fall back to 'mobicule_data'
-        const schema = adminRow.postgresSchema?.trim() || 'mobicule_data'
-        const billingTable = `${schema}.fact_answered_calls`
+        let billingTable: string
+        if (detectedTables.includes('fact_answered_customer') || detectedTables.includes('fact_answered_employee')) {
+            const selectParts: string[] = []
+            if (detectedTables.includes('fact_answered_customer')) {
+                selectParts.push(`SELECT client_name, agent_id, date, call_duration::text AS call_duration, call_uuid FROM ${schema}.fact_answered_customer`)
+            }
+            if (detectedTables.includes('fact_answered_employee')) {
+                selectParts.push(`SELECT client_name, agent_id, date, call_duration::text AS call_duration, call_uuid FROM ${schema}.fact_answered_employee`)
+            }
+            billingTable = `(${selectParts.join(' UNION ALL ')}) AS unified_billing`
+        } else {
+            billingTable = `${schema}.fact_answered_calls`
+        }
 
         let dateExpr: string
         if (period === 'monthly') {
@@ -132,7 +192,6 @@ billingRoutes.get('/report', async (c) => {
         }
         if (agentIdFilter) {
             queryParams.push(`%${agentIdFilter}%`)
-            // we assume agent_id is a column in fact_answered_calls.
             optionalFilters.push(`AND agent_id ILIKE $${queryParams.length}`)
         }
 
@@ -155,17 +214,6 @@ billingRoutes.get('/report', async (c) => {
       ORDER BY client_name, agent_id, call_date
     `
 
-        // ── Execute query ─────────────────────────────────────────────────────────
-
-        const sql = postgres(resolved.url, {
-            max: resolved.viaHyperdrive ? 5 : 1,
-            idle_timeout: resolved.viaHyperdrive ? 20 : 5,
-            connect_timeout: 10,
-            prepare: false,
-            fetch_types: false,
-            onnotice: () => { },
-        })
-
         let rows: BillingRow[]
         try {
             const rawRows = (await sql.unsafe(querySql, queryParams)) as Record<string, unknown>[]
@@ -185,17 +233,12 @@ billingRoutes.get('/report', async (c) => {
                 return c.json(
                     {
                         success: false,
-                        error: `Billing table not found: ${billingTable}. Set the correct Postgres schema in your admin settings (current: "${schema}").`,
+                        error: `Billing table not found in schema "${schema}". Set the correct Postgres schema in your admin settings.`,
                     },
                     422,
                 )
             }
             throw queryErr
-        } finally {
-            // Don't close Hyperdrive-backed connections — they are pooled
-            if (!resolved.viaHyperdrive) {
-                await sql.end({ timeout: 5 }).catch((e) => console.warn('Postgres end error:', e))
-            }
         }
 
         // ── Grand totals ──────────────────────────────────────────────────────────
@@ -230,5 +273,9 @@ billingRoutes.get('/report', async (c) => {
         console.error('Billing report error:', err)
         const message = err instanceof Error ? err.message : 'Query failed'
         return c.json({ success: false, error: message }, 500)
+    } finally {
+        if (sql && resolved && !resolved.viaHyperdrive) {
+            await sql.end({ timeout: 5 }).catch((e) => console.warn('Postgres end error:', e))
+        }
     }
 })
