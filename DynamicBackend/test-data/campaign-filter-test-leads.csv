@@ -1,0 +1,13 @@
+reference_id,batch_id,party_name,party_mobile_number,preferred_language,emi_amount,emi_date,loan_type,city,notes
+RETRY-001,batch-retry-filter-01,Ravi Kumar,+919810000001,Hindi,12500,2026-06-05,Personal,Delhi,Use for unanswered scenario
+RETRY-002,batch-retry-filter-01,Anita Sharma,+919810000002,English,8400,2026-06-06,Gold,Mumbai,Use for short answered scenario
+RETRY-003,batch-retry-filter-01,Sunil Verma,+919810000003,Hindi,15600,2026-06-07,Auto,Pune,Normal completed call candidate
+RETRY-004,batch-retry-filter-01,Priya Nair,+919810000004,Marathi,9100,2026-06-08,Consumer Loan,Nashik,Another unanswered candidate
+RETRY-005,batch-retry-filter-01,Deepak Joshi,+919810000005,English,13350,2026-06-09,Home Loan,Jaipur,Answered but dropped quickly candidate
+RETRY-006,batch-retry-filter-01,Kavita Rao,+919810000006,Hindi,7200,2026-06-10,Business Loan,Indore,Control row
+RETRY-007,batch-retry-filter-01,Mehul Shah,+919810000007,Gujarati,10100,2026-06-11,Personal,Ahmedabad,Busy or no response candidate
+RETRY-008,batch-retry-filter-01,Farah Khan,+919810000008,English,11800,2026-06-12,Education,Hyderabad,Control row
+RETRY-009,batch-retry-filter-01,Vikram Singh,+919810000009,Hindi,9600,2026-06-13,Gold,Lucknow,Short call candidate
+RETRY-010,batch-retry-filter-01,Sneha Patil,+919810000010,Marathi,14300,2026-06-14,Auto,Nagpur,Unanswered candidate
+RETRY-011,batch-retry-filter-01,Arjun Das,+919810000011,English,8700,2026-06-15,Credit Card,Kolkata,Completed healthy call candidate
+RETRY-012,batch-retry-filter-01,Nikita Iyer,+919810000012,Tamil,11250,2026-06-16,Personal,Chennai,Use for retry flow verification

@@ -1,0 +1,50 @@
+{
+  // Keep local Postgres secrets in `.dev.vars`; do not commit them here.
+  // Production campaign imports and dashboards should use the Hyperdrive binding below.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "verbalyze-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "JWT_SECRET": "dev-only-change-with-wrangler-secret",
+    "ACCELBIZ_DUMP_LEAD_WEBHOOK_URL": ""
+  },
+  // Local campaign imports: set direct Postgres URLs in `.dev.vars` (not Hyperdrive read pools).
+  // For production Postgres access from Workers, replace the placeholder id below
+  // with the real Cloudflare Hyperdrive configuration id for `vconnect-analytics`.
+  // This Hyperdrive target must use write-capable Postgres credentials because
+  // campaign imports upsert rows into `vconnect_data.dump_lead_info`.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "verbalyze-d1",
+      "database_id": "920c8309-8afd-45ea-a025-42012090b683"
+    }
+  ],
+  "hyperdrive": [
+    {
+      "binding": "VCONNECT_DB",
+      "id": "175f008303a942d2b2271b1b5e862434",
+      "localConnectionString": "postgresql://vconnect_readonly:v_readonly_99_secure@13.127.101.176:5432/Vconnect?sslmode=require"
+    },
+    {
+      "binding": "FUJITSU_DB",
+      "id": "07c9ee3f522d4a8c9e8dcb962422e1c0",
+      "localConnectionString": "postgresql://fujitsu_internal:fujitsu_read_only_2026@15.207.140.19:5432/fujitsu"
+    },
+    {
+      "binding": "ACCELBIZ_DB",
+      "id": "b0d1259161a848ff8ff4882bc3d78210",
+      "localConnectionString": "postgresql://accelbiz_readonly:accelbiz_ro_2026@52.66.123.165:5432/accelbiz"
+    },
+    {
+      "binding": "TOWNER_DB",
+      "id": "c5ee89bdb9b943c69015b5e6786ed242",
+      "localConnectionString": "postgresql://towner_taxi_ro:towner_taxi_ro_2026@13.202.211.136:5432/Towner_data"
+    }
+  ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  }
+}
