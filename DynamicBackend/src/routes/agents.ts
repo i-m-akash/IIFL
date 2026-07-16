@@ -158,6 +158,46 @@ function promptServiceFailure(
   )
 }
 
+function injectLanguagesIntoPrompt(promptObj: any, languages: string[]) {
+  if (!promptObj || typeof promptObj !== 'object' || Array.isArray(promptObj)) return promptObj
+
+  const selectedLanguages = languages && languages.length > 0 ? languages : ['English']
+  const updated = { ...promptObj }
+
+  // 1. Set at root level
+  updated.language_settings = {
+    supported: selectedLanguages
+  }
+
+  // 2. Set inside system_prompt
+  if (updated.system_prompt && typeof updated.system_prompt === 'object' && !Array.isArray(updated.system_prompt)) {
+    updated.system_prompt = {
+      ...updated.system_prompt,
+      language_settings: {
+        supported: selectedLanguages
+      }
+    }
+  }
+
+  // 3. Set inside data and data.system_prompt
+  if (updated.data && typeof updated.data === 'object' && !Array.isArray(updated.data)) {
+    updated.data = { ...updated.data }
+    updated.data.language_settings = {
+      supported: selectedLanguages
+    }
+    if (updated.data.system_prompt && typeof updated.data.system_prompt === 'object' && !Array.isArray(updated.data.system_prompt)) {
+      updated.data.system_prompt = {
+        ...updated.data.system_prompt,
+        language_settings: {
+          supported: selectedLanguages
+        }
+      }
+    }
+  }
+
+  return updated
+}
+
 function parseAgentMeta(value: string | null): AgentMeta {
   if (!value) return {}
   try {
@@ -648,6 +688,10 @@ export const agentsRoutes = new Hono<AppEnv>()
       }
     }
 
+    if (generatedPrompt) {
+      generatedPrompt = injectLanguagesIntoPrompt(generatedPrompt as Record<string, unknown>, parsed.data.languages)
+    }
+
     const now = new Date()
     const uploadedScriptNames = parsed.data.uploadedScriptNames.length
       ? parsed.data.uploadedScriptNames
@@ -778,6 +822,11 @@ export const agentsRoutes = new Hono<AppEnv>()
         : Array.isArray(existingMeta.uploadedScriptNames)
           ? existingMeta.uploadedScriptNames
           : []
+
+    if (generatedPrompt) {
+      generatedPrompt = injectLanguagesIntoPrompt(generatedPrompt as Record<string, unknown>, parsed.data.languages)
+    }
+
     const nextMetaJson = JSON.stringify({
       ...buildAgentMeta({ ...parsed.data, channels: selectedChannels }),
       generatedPrompt,

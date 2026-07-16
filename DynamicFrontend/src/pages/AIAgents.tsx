@@ -276,6 +276,46 @@ function parseGeneratedPrompt(value: string) {
   throw new Error('Generated call flow must be a JSON object')
 }
 
+function injectLanguagesIntoPrompt(promptObj: any, languages: string[]) {
+  if (!promptObj || typeof promptObj !== 'object' || Array.isArray(promptObj)) return promptObj
+
+  const selectedLanguages = languages && languages.length > 0 ? languages : ['English']
+  const updated = { ...promptObj }
+
+  // 1. Set at root level
+  updated.language_settings = {
+    supported: selectedLanguages
+  }
+
+  // 2. Set inside system_prompt
+  if (updated.system_prompt && typeof updated.system_prompt === 'object' && !Array.isArray(updated.system_prompt)) {
+    updated.system_prompt = {
+      ...updated.system_prompt,
+      language_settings: {
+        supported: selectedLanguages
+      }
+    }
+  }
+
+  // 3. Set inside data and data.system_prompt
+  if (updated.data && typeof updated.data === 'object' && !Array.isArray(updated.data)) {
+    updated.data = { ...updated.data }
+    updated.data.language_settings = {
+      supported: selectedLanguages
+    }
+    if (updated.data.system_prompt && typeof updated.data.system_prompt === 'object' && !Array.isArray(updated.data.system_prompt)) {
+      updated.data.system_prompt = {
+        ...updated.data.system_prompt,
+        language_settings: {
+          supported: selectedLanguages
+        }
+      }
+    }
+  }
+
+  return updated
+}
+
 function getSystemPrompt(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
@@ -973,14 +1013,15 @@ function AgentWizard({
       const result = await generateCallFlowDraft(form, promptSourceMode)
       const generatedPrompt = result.generatedPrompt
       if (!generatedPrompt) throw new Error('Call flow API did not return a generated prompt')
+      const updatedPrompt = injectLanguagesIntoPrompt(generatedPrompt, form.languages)
       setForm(current => ({
         ...current,
         callFlowText: result.callFlowText ?? current.callFlowText,
-        generatedPrompt: formatGeneratedPrompt(generatedPrompt),
+        generatedPrompt: formatGeneratedPrompt(updatedPrompt),
         uploadedScriptNames: result.uploadedScriptNames ?? current.uploadedScriptNames,
       }))
       setErrors((current) => ({ ...current, callFlowText: '', scriptFiles: '', generatedPrompt: '' }))
-      applyGeneratedPromptHints(generatedPrompt)
+      applyGeneratedPromptHints(updatedPrompt)
       toast.success('Call flow generated. Review and edit it before continuing.', { id: toastId })
     } catch (err) {
       console.error(err)
@@ -1027,6 +1068,8 @@ function AgentWizard({
       development_placeholder: true,
     }
 
+    const updatedPrompt = injectLanguagesIntoPrompt(generatedPrompt, form.languages)
+
     setForm((current) => ({
       ...current,
       name: clampAgentName(current.name.trim() || inferredName),
@@ -1035,7 +1078,7 @@ function AgentWizard({
       gender: current.gender || 'Neutral',
       languages: current.languages.length ? current.languages : ['English'],
       callFlowText: current.callFlowText.trim() || sourceSummary,
-      generatedPrompt: formatGeneratedPrompt(generatedPrompt),
+      generatedPrompt: formatGeneratedPrompt(updatedPrompt),
       uploadedScriptNames,
     }))
     setErrors((current) => ({ ...current, callFlowText: '', scriptFiles: '', generatedPrompt: '' }))
@@ -1171,12 +1214,28 @@ function AgentWizard({
   }
 
   const toggleLanguage = (language: string) => {
-    setForm((current) => ({
-      ...current,
-      languages: current.languages.includes(language)
+    setForm((current) => {
+      const nextLanguages = current.languages.includes(language)
         ? current.languages.filter((item) => item !== language)
-        : [...current.languages, language],
-    }))
+        : [...current.languages, language]
+
+      let nextGeneratedPrompt = current.generatedPrompt
+      if (current.generatedPrompt.trim()) {
+        try {
+          const parsed = JSON.parse(current.generatedPrompt)
+          const updated = injectLanguagesIntoPrompt(parsed, nextLanguages)
+          nextGeneratedPrompt = formatGeneratedPrompt(updated)
+        } catch (e) {
+          console.error('Failed to update language inside invalid generatedPrompt JSON:', e)
+        }
+      }
+
+      return {
+        ...current,
+        languages: nextLanguages,
+        generatedPrompt: nextGeneratedPrompt,
+      }
+    })
     setErrors((current) => ({ ...current, languages: '' }))
   }
 
@@ -1438,7 +1497,33 @@ function AgentWizard({
                       id="generated-call-flow"
                       value={form.generatedPrompt}
                       onChange={(event) => {
-                        setForm((current) => ({ ...current, generatedPrompt: event.target.value }))
+                        const nextValue = event.target.value
+                        setForm((current) => {
+                          let nextLanguages = current.languages
+                          try {
+                            const parsed = JSON.parse(nextValue)
+                            const systemPrompt = getSystemPrompt(parsed)
+                            const langSettings = systemPrompt?.language_settings || parsed?.language_settings || parsed?.data?.language_settings
+                            if (langSettings && typeof langSettings === 'object' && !Array.isArray(langSettings)) {
+                              const supported = (langSettings as Record<string, unknown>).supported
+                              if (Array.isArray(supported) && supported.length > 0) {
+                                const mappedLangs = supported
+                                  .map(l => LANGUAGE_OPTIONS.find(opt => opt.toLowerCase() === String(l).toLowerCase()))
+                                  .filter((l): l is typeof LANGUAGE_OPTIONS[number] => !!l)
+                                if (mappedLangs.length > 0) {
+                                  nextLanguages = mappedLangs
+                                }
+                              }
+                            }
+                          } catch {
+                            // Ignore syntax errors while typing
+                          }
+                          return {
+                            ...current,
+                            generatedPrompt: nextValue,
+                            languages: nextLanguages,
+                          }
+                        })
                         setErrors((current) => ({ ...current, generatedPrompt: '' }))
                       }}
                       spellCheck={false}
@@ -1588,7 +1673,7 @@ function AgentWizard({
                   </>
                 )}
 
-                {/* <div className="space-y-3 md:col-span-2">
+                <div className="space-y-3 md:col-span-2">
                   <div>
                     <Label>Supported Languages</Label>
                     <p className="mt-1 text-xs text-slate-600">Choose the languages this agent should support for conversations.</p>
@@ -1612,7 +1697,7 @@ function AgentWizard({
                     })}
                   </div>
                   {errors.languages ? <p className="text-sm text-red-600">{errors.languages}</p> : null}
-                </div> */}
+                </div>
               </div>
             </div>
           ) : null}
