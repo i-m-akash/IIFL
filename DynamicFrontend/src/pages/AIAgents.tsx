@@ -408,6 +408,34 @@ async function deleteAgent(agentId: string) {
   }
 }
 
+function updateSupportedLanguagesLine(text: string, languages: string[]): string {
+  const linePattern = /^[ \t]*Supported Languages\s*:\s*(.*)$/mi;
+  const lines = text.split('\n');
+  const lineIndex = lines.findIndex(line => linePattern.test(line));
+
+  if (languages.length === 0) {
+    if (lineIndex !== -1) {
+      lines.splice(lineIndex, 1);
+      if (lineIndex > 0 && lines[lineIndex - 1].trim() === '') {
+        lines.splice(lineIndex - 1, 1);
+      }
+    }
+    return lines.join('\n');
+  }
+
+  const newLine = `Supported Languages: ${languages.join(', ')}`;
+  if (lineIndex !== -1) {
+    lines[lineIndex] = newLine;
+    return lines.join('\n');
+  } else {
+    const trimmed = text.trimEnd();
+    if (trimmed === '') {
+      return newLine;
+    }
+    return trimmed + '\n\n' + newLine;
+  }
+}
+
 function defaultAgentForm(agent?: Agent): AgentFormValue {
   const normalizedChannels = agent?.channels?.length
     ? agent.channels.flatMap((channel) => (channel === 'Call' ? ['Inbound Call', 'Outbound Call'] : [channel]))
@@ -415,7 +443,7 @@ function defaultAgentForm(agent?: Agent): AgentFormValue {
   return {
     name: agent?.name ?? '',
     description: agent?.description ?? '',
-    callFlowText: agent?.callFlowText ?? '',
+    callFlowText: agent?.callFlowText ?? (agent ? '' : 'Supported Languages: English'),
     generatedPrompt: formatGeneratedPrompt(agent?.generatedPrompt),
     uploadedScriptNames: agent?.uploadedScriptNames ?? [],
     useCase: agent?.useCase ?? '',
@@ -1171,12 +1199,17 @@ function AgentWizard({
   }
 
   const toggleLanguage = (language: string) => {
-    setForm((current) => ({
-      ...current,
-      languages: current.languages.includes(language)
+    setForm((current) => {
+      const nextLanguages = current.languages.includes(language)
         ? current.languages.filter((item) => item !== language)
-        : [...current.languages, language],
-    }))
+        : [...current.languages, language]
+      const nextCallFlowText = updateSupportedLanguagesLine(current.callFlowText, nextLanguages)
+      return {
+        ...current,
+        languages: nextLanguages,
+        callFlowText: nextCallFlowText,
+      }
+    })
     setErrors((current) => ({ ...current, languages: '' }))
   }
 
@@ -1285,22 +1318,6 @@ function AgentWizard({
                 </div>
 
                 {promptSourceMode === 'description' ? (<>
-                  <div className="space-y-2">
-                    <Label htmlFor="call-flow-description">Call Flow Description</Label>
-                    <textarea
-                      id="call-flow-description"
-                      value={form.callFlowText}
-                      onChange={(e) => {
-                        setForm((current) => ({ ...current, callFlowText: e.target.value, generatedPrompt: '', uploadedScriptNames: [] }))
-                        setErrors((current) => ({ ...current, callFlowText: '', generatedPrompt: '' }))
-                      }}
-                      rows={4}
-                      placeholder="Describe the opening, qualification questions, branching rules, escalation points, and closing behavior."
-                      className="flex min-h-[176px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    />
-                    <p className="text-xs text-slate-500">This text is used only to generate the call flow. The card description lives in General Info.</p>
-                    {errors.callFlowText ? <p className="text-sm text-red-600">{errors.callFlowText}</p> : null}
-                  </div>
                   <div className="space-y-3 md:col-span-2">
                     <div>
                       <Label>Supported Languages</Label>
@@ -1325,6 +1342,22 @@ function AgentWizard({
                       })}
                     </div>
                     {errors.languages ? <p className="text-sm text-red-600">{errors.languages}</p> : null}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="call-flow-description">Call Flow Description</Label>
+                    <textarea
+                      id="call-flow-description"
+                      value={form.callFlowText}
+                      onChange={(e) => {
+                        setForm((current) => ({ ...current, callFlowText: e.target.value, generatedPrompt: '', uploadedScriptNames: [] }))
+                        setErrors((current) => ({ ...current, callFlowText: '', generatedPrompt: '' }))
+                      }}
+                      rows={4}
+                      placeholder="Describe the opening, qualification questions, branching rules, escalation points, and closing behavior."
+                      className="flex min-h-[176px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    />
+                    <p className="text-xs text-slate-500">This text is used only to generate the call flow. The card description lives in General Info.</p>
+                    {errors.callFlowText ? <p className="text-sm text-red-600">{errors.callFlowText}</p> : null}
                   </div>
                 </>
 
