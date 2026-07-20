@@ -103,12 +103,24 @@ billingRoutes.get('/report', async (c) => {
         let detectedTables: string[] = []
 
         try {
-            const tableMatches = (await sql.unsafe(`
-                SELECT table_schema, table_name
-                FROM information_schema.tables
-                WHERE table_name IN ('fact_answered_calls', 'fact_answered_customer', 'fact_answered_employee')
-                  AND table_schema NOT IN ('pg_catalog', 'information_schema')
+            let tableMatches = (await sql.unsafe(`
+                SELECT n.nspname AS table_schema, c.relname AS table_name
+                FROM pg_catalog.pg_class c
+                JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE c.relname IN ('fact_answered_calls', 'fact_answered_customer', 'fact_answered_employee')
+                  AND c.relkind IN ('r', 'v', 'm', 'f', 'p')
+                  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
             `)) as Record<string, unknown>[]
+
+            if (tableMatches.length === 0) {
+                // Fallback to information_schema.tables
+                tableMatches = (await sql.unsafe(`
+                    SELECT table_schema, table_name
+                    FROM information_schema.tables
+                    WHERE table_name IN ('fact_answered_calls', 'fact_answered_customer', 'fact_answered_employee')
+                      AND table_schema NOT IN ('pg_catalog', 'information_schema')
+                `)) as Record<string, unknown>[]
+            }
 
             if (tableMatches.length > 0) {
                 // Determine the correct schema from the database
@@ -124,7 +136,30 @@ billingRoutes.get('/report', async (c) => {
                     .map(t => t.table_name as string)
             }
         } catch (detectErr) {
-            console.warn('Postgres schema detection failed, falling back:', detectErr)
+            console.warn('Postgres schema detection failed, trying fallback:', detectErr)
+            try {
+                const tableMatches = (await sql.unsafe(`
+                    SELECT table_schema, table_name
+                    FROM information_schema.tables
+                    WHERE table_name IN ('fact_answered_calls', 'fact_answered_customer', 'fact_answered_employee')
+                      AND table_schema NOT IN ('pg_catalog', 'information_schema')
+                `)) as Record<string, unknown>[]
+
+                if (tableMatches.length > 0) {
+                    let matchedSchema = tableMatches[0].table_schema as string
+                    const configuredSchemaMatch = tableMatches.find(t => String(t.table_schema).toLowerCase() === schema.toLowerCase())
+                    if (configuredSchemaMatch) {
+                        matchedSchema = configuredSchemaMatch.table_schema as string
+                    }
+
+                    schema = matchedSchema
+                    detectedTables = tableMatches
+                        .filter(t => String(t.table_schema).toLowerCase() === matchedSchema.toLowerCase())
+                        .map(t => t.table_name as string)
+                }
+            } catch (fallbackErr) {
+                console.warn('Postgres fallback schema detection failed:', fallbackErr)
+            }
         }
 
         // If the detected schema is different from the saved SQLite config, fix the configuration in SQLite
