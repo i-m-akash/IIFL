@@ -146,15 +146,23 @@ function promptServiceFailure(
   message: string,
   error: unknown,
   code: 'PROMPT_EXTRACTION_FAILED' | 'PROMPT_GENERATION_FAILED',
+  correlationId?: string,
 ) {
-  console.error(`[agents] ${code}:`, error)
+  const errMessage = error instanceof Error ? error.message : String(error)
+  console.error(`[agents] [CorrelationID: ${correlationId || 'N/A'}] ${code}:`, error)
+
+  const isTimeout = errMessage.toLowerCase().includes('timeout') || errMessage.toLowerCase().includes('abort') || (error instanceof DOMException && error.name === 'AbortError')
+  const status = isTimeout ? 504 : 502
+  const finalCode = isTimeout ? 'UPSTREAM_TIMEOUT' : code
+
   return c.json(
     {
       success: false,
       error: message,
-      code,
+      code: finalCode,
+      correlationId,
     },
-    502,
+    status,
   )
 }
 
@@ -391,10 +399,10 @@ async function parseCallFlowRequest(c: Context<AppEnv>) {
   }
 }
 
-async function extractPromptScripts(env: AppEnv['Bindings'], scriptFiles: File[]) {
+async function extractPromptScripts(env: AppEnv['Bindings'], scriptFiles: File[], correlationId?: string) {
   const extractedScripts: Array<{ fileName: string; text: string }> = []
   for (const file of scriptFiles) {
-    const text = await extractTextFromPromptFile(env, file)
+    const text = await extractTextFromPromptFile(env, file, correlationId)
     if (text.trim()) extractedScripts.push({ fileName: file.name, text })
   }
   return extractedScripts
@@ -483,31 +491,43 @@ export const agentsRoutes = new Hono<AppEnv>()
       return c.json({ success: false, error: 'Forbidden' }, 403)
     }
 
-    const requestData = await parseCallFlowRequest(c)
+    const correlationId = c.req.header('X-Correlation-ID') || crypto.randomUUID()
+    console.log(`[agents] [/generate-call-flow] [CorrelationID: ${correlationId}] Started request processing for user: ${user.sub}`)
+
+    let requestData
+    try {
+      requestData = await parseCallFlowRequest(c)
+    } catch (err) {
+      console.error(`[agents] [/generate-call-flow] [CorrelationID: ${correlationId}] Request parsing failed:`, err)
+      return c.json({ success: false, error: 'Malformed request payload', correlationId }, 400)
+    }
+
     if (!requestData.callFlowText && requestData.scriptFiles.length === 0) {
-      return c.json({ success: false, error: 'Provide call flow text or upload at least one script file' }, 400)
+      return c.json({ success: false, error: 'Provide call flow text or upload at least one script file', correlationId }, 400)
     }
 
     let extractedScripts: Array<{ fileName: string; text: string }> = []
     try {
-      extractedScripts = await extractPromptScripts(c.env, requestData.scriptFiles)
+      extractedScripts = await extractPromptScripts(c.env, requestData.scriptFiles, correlationId)
     } catch (error) {
       return promptServiceFailure(
         c,
         'We could not read the uploaded script file right now. Please try again, use a plain text file, or paste the call flow directly.',
         error,
         'PROMPT_EXTRACTION_FAILED',
+        correlationId,
       )
     }
 
     const extractedText = formatExtractedScriptSource(extractedScripts)
     const sourceText = [requestData.callFlowText, extractedText].filter((item) => item.trim()).join('\n\n')
     if (!sourceText.trim()) {
-      return c.json({ success: false, error: 'No readable call flow content was found' }, 400)
+      return c.json({ success: false, error: 'No readable call flow content was found', correlationId }, 400)
     }
 
     try {
-      const generatedPrompt = await generatePromptFromText(c.env, sourceText)
+      const generatedPrompt = await generatePromptFromText(c.env, sourceText, correlationId)
+      console.log(`[agents] [/generate-call-flow] [CorrelationID: ${correlationId}] Success generating prompt`)
       return c.json({
         success: true,
         data: {
@@ -515,6 +535,7 @@ export const agentsRoutes = new Hono<AppEnv>()
           callFlowText: sourceText,
           uploadedScriptNames: extractedScripts.map((item) => item.fileName),
         },
+        correlationId,
       })
     } catch (error) {
       return promptServiceFailure(
@@ -522,6 +543,7 @@ export const agentsRoutes = new Hono<AppEnv>()
         'Call flow generation is temporarily unavailable. Please try again in a few minutes.',
         error,
         'PROMPT_GENERATION_FAILED',
+        correlationId,
       )
     }
   })

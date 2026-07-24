@@ -28,13 +28,15 @@ export class ApiError extends Error {
   status?: number
   code?: string
   detail?: string
+  correlationId?: string
 
-  constructor(message: string, options: { status?: number; code?: string; detail?: string } = {}) {
+  constructor(message: string, options: { status?: number; code?: string; detail?: string; correlationId?: string } = {}) {
     super(message)
     this.name = 'ApiError'
     this.status = options.status
     this.code = options.code
     this.detail = options.detail
+    this.correlationId = options.correlationId
   }
 }
 
@@ -79,11 +81,11 @@ export function getUserErrorMessage(error: unknown, fallback = 'Something went w
 }
 
 export async function apiErrorFromResponse(response: Response, fallback = 'Something went wrong. Please try again.') {
-  let body: ApiErrorBody | null = null
+  let body: any = null
   let detail = ''
 
   try {
-    body = (await response.clone().json()) as ApiErrorBody
+    body = (await response.clone().json()) as any
   } catch {
     detail = await response.clone().text().catch(() => '')
   }
@@ -91,10 +93,13 @@ export async function apiErrorFromResponse(response: Response, fallback = 'Somet
   const rawMessage = body?.error ?? body?.message ?? detail
   const message = toUserFriendlyMessage(rawMessage, fallback, response.status)
   const code = typeof body?.code === 'string' ? body.code : undefined
+  const correlationId = typeof body?.correlationId === 'string' ? body.correlationId : undefined
+
   return new ApiError(message, {
     status: response.status,
     code,
     detail: typeof rawMessage === 'string' ? rawMessage : undefined,
+    correlationId,
   })
 }
 
@@ -110,4 +115,39 @@ export async function apiFetch(input: string, init?: RequestInit): Promise<Respo
   }
 
   return response
+}
+
+export async function apiFetchWithRetry(
+  input: string,
+  init?: RequestInit,
+  retries = 3,
+  initialDelayMs = 1000,
+  backoffFactor = 2,
+): Promise<Response> {
+  let currentAttempt = 0
+  let delay = initialDelayMs
+
+  while (true) {
+    try {
+      currentAttempt++
+      const response = await apiFetch(input, init)
+
+      const isTransient = [502, 503, 504].includes(response.status)
+      if (isTransient && currentAttempt < retries) {
+        console.warn(`[apiFetchWithRetry] Attempt ${currentAttempt} failed with status ${response.status}. Retrying in ${delay}ms...`)
+        await new Promise((resolve) => setTimeout(resolve, delay))
+        delay *= backoffFactor
+        continue
+      }
+      return response
+    } catch (error) {
+      if (currentAttempt < retries) {
+        console.warn(`[apiFetchWithRetry] Attempt ${currentAttempt} failed due to network error. Retrying in ${delay}ms...`, error)
+        await new Promise((resolve) => setTimeout(resolve, delay))
+        delay *= backoffFactor
+        continue
+      }
+      throw error
+    }
+  }
 }

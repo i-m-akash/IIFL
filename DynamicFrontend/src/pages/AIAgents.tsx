@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { apiErrorFromResponse, apiFetch, getUserErrorMessage } from '@/lib/api'
+import { apiErrorFromResponse, apiFetch, apiFetchWithRetry, getUserErrorMessage } from '@/lib/api'
 import { canManageAgents, canUseAgentPlayground, canViewAgentInsights, canViewAgents, getDefaultAuthorizedPath } from '@/lib/roles'
 import { useAuth } from '@/providers/AuthProvider'
 import { brandSearchInputClass } from '@/lib/brandCss'
@@ -330,7 +330,8 @@ async function generateCallFlowDraft(value: AgentFormValue, sourceMode: PromptSo
     }
   }
 
-  const response = await apiFetch('/api/agents/generate-call-flow', {
+  // Uses custom fetch with automatic exponential backoff retries (3 retries on transient 502/503/504)
+  const response = await apiFetchWithRetry('/api/agents/generate-call-flow', {
     method: 'POST',
     body: formData,
   })
@@ -982,9 +983,12 @@ function AgentWizard({
       setErrors((current) => ({ ...current, callFlowText: '', scriptFiles: '', generatedPrompt: '' }))
       applyGeneratedPromptHints(generatedPrompt)
       toast.success('Call flow generated. Review and edit it before continuing.', { id: toastId })
-    } catch (err) {
+    } catch (err: any) {
       console.error(err)
-      const message = getUserErrorMessage(err, 'Call flow generation is temporarily unavailable. Please try again in a few minutes.')
+      let message = getUserErrorMessage(err, 'Call flow generation is temporarily unavailable. Please try again in a few minutes.')
+      if (err && err.correlationId) {
+        message = `${message} (Request ID: ${err.correlationId})`
+      }
       setErrors((current) => ({ ...current, generatedPrompt: message }))
       toast.error('Call flow could not be generated. Please try again.', { id: toastId })
     } finally {
